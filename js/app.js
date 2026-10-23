@@ -1,13 +1,18 @@
 // PIVX Names — zero seeds. Static client for the PiNS protocol.
-// Keys live in this tab's memory only. CSP allows calls ONLY to:
-//   registrar.pivx.name (check/pay/prices) + indexer.pivx.name (resolve/track)
+// The name-ownership key is created FOR the user inside the sign click —
+// never shown as a step, never a wallet key, never transmitted.
+// Stored locally (localStorage) so names survive tab close; CSP allows calls
+// ONLY to registrar.pivx.name + indexer.pivx.name.
 
 const REGISTRAR = "https://registrar.pivx.name";
 const INDEXER = "https://indexer.pivx.name";
 import * as ed25519 from "./vendor/ed25519.js";
+
 const ZONES = ["pivx", "private", "secure", "safe"];
 const MEMO_MAX = 512;
 const B32 = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+const LS_KEY = "pivxname_identity_v1"; // {pubkey_hex, privkey_hex}
+const LS_NAMES = "pivxname_names_v1";   // {domain: {pubkey_hex, rx, ts}}
 
 const $ = (id) => document.getElementById(id);
 const show = (el) => el.classList.remove("hidden");
@@ -29,15 +34,14 @@ async function api(url, opts) {
   return j.response;
 }
 const regGet = (p) => api(REGISTRAR + p);
-const regPost = (p, body, asText) => api(REGISTRAR + p, {
+const regPost = (p, body) => api(REGISTRAR + p, {
   method: "POST",
-  headers: { "Content-Type": asText ? "text/plain" : "application/json" },
+  headers: { "Content-Type": "application/json" },
   body: JSON.stringify(body),
 });
 const idxGet = (p) => api(INDEXER + p);
-const idxPost = (p) => api(INDEXER + p, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
 
-const zat = (z) => { const p = Number(z) / 1e8; return Number.isInteger(p) ? String(p) : String(p); };
+const zat = (z) => String(Number(z) / 1e8);
 
 // ---------------- bech32 / validation (port of indexer rules) ----------------
 function b32Polymod(vals) {
@@ -57,7 +61,7 @@ function b32Expand(hrp) {
 function validShielded(addr) {
   if (!addr || addr !== addr.toLowerCase() || addr.length !== 78) return false;
   const pos = addr.lastIndexOf("1");
-  if (pos < 1 || addr.length - pos - 1 < 6) return false; // ≥6 checksum chars after sep
+  if (pos < 1 || addr.length - pos - 1 < 6) return false;
   const hrp = addr.slice(0, pos);
   const data = [];
   for (const ch of addr.slice(pos + 1)) {
@@ -77,82 +81,92 @@ function validDomain(d) {
 }
 const validPubHex = (h) => /^[0-9a-f]{64}$/.test(h || "");
 
-// ---------------- identity (noble ed25519, async APIs only) ----------------
-const S = { domain: null, priceZat: null, priv: null, pub: null, memo: null, payAddr: null, amountPivx: null };
-
-async function newIdentity() {
-  const priv = ed25519.utils.randomPrivateKey();
-  const pub = await ed25519.getPublicKeyAsync(priv);
-  return { priv, pub };
-}
+// ---------------- identity: silent, persistent, never a step ----------------
 const hex = (b) => [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
 const unhex = (h) => new Uint8Array(h.match(/.{1,2}/g).map((b) => parseInt(b, 16)));
 const enc = new TextEncoder();
 
-async function signMsg(msgStr, priv) {
-  return hex(await ed25519.signAsync(enc.encode(msgStr), priv));
+function loadStoredIdentity() {
+  try {
+    const j = JSON.parse(localStorage.getItem(LS_KEY) || "null");
+    if (j && validPubHex(j.privkey_hex)) return j;
+  } catch { /* corrupted — regenerate on next use */ }
+  return null;
 }
-async function selfVerify(memo) {
-  const parts = memo.split(":");
-  const op = parts[2];
-  const pubIdx = ["REG", "UPD", "BUY"].includes(op) ? 5 : 4;
-  // CHG: memo field is the NEW owner; signature must verify against the SIGNER (our key)
-  const pub = op === "CHG" ? S.pub : unhex(parts[pubIdx]);
-  const body = enc.encode(parts.slice(0, -1).join(":"));
-  return ed25519.verifyAsync(unhex(parts[parts.length - 1]), body, pub);
+function storeIdentity(id) {
+  localStorage.setItem(LS_KEY, JSON.stringify(id));
+}
+function rememberName(domain, pubkeyHex, rx) {
+  try {
+    let names = {};
+    try { names = JSON.parse(localStorage.getItem(LS_NAMES) || "{}"); } catch { /* fresh */ }
+    names[domain] = { pubkey_hex: pubkeyHex, rx, ts: Date.now() };
+    localStorage.setItem(LS_NAMES, JSON.stringify(names));
+    window.__pinsDebug = { lastStored: domain, count: Object.keys(names).length };
+  } catch (e) {
+    window.__pinsError = "rememberName: " + e.message;
+  }
+}
+function myNames() {
+  try { return JSON.parse(localStorage.getItem(LS_NAMES) || "{}"); } catch { return {}; }
 }
 
-function keyfile() {
+async function ensureIdentity() {
+  let id = loadStoredIdentity();
+  if (!id) {
+    const priv = ed25519.utils.randomPrivateKey();
+    id = { pubkey_hex: hex(await ed25519.getPublicKeyAsync(priv)), privkey_hex: hex(priv) };
+    storeIdentity(id);
+  }
+  return id;
+}
+async function setIdentity(privHex) {
+  const id = { pubkey_hex: hex(await ed25519.getPublicKeyAsync(unhex(privHex))), privkey_hex: privHex };
+  storeIdentity(id);
+  return id;
+}
+
+function keyfileJson(id) {
   return JSON.stringify({
     v: 1,
     type: "pivxname-identity",
-    note: "Name-ownership key. NOT a wallet key — cannot spend PIVX. Keep this file safe; it owns your names.",
-    pubkey_hex: hex(S.pub),
-    privkey_hex: hex(S.priv),
+    note: "Name-ownership key. NOT a wallet key — cannot spend PIVX. Keep this file: it owns your names.",
+    pubkey_hex: id.pubkey_hex,
+    privkey_hex: id.privkey_hex,
     created: new Date().toISOString(),
   }, null, 2);
 }
-
-function downloadKeyfile() {
+function downloadKeyfile(id) {
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([keyfile()], { type: "application/json" }));
-  a.download = `pivxname-identity-${hex(S.pub).slice(0, 8)}.json`;
+  a.href = URL.createObjectURL(new Blob([keyfileJson(id)], { type: "application/json" }));
+  a.download = `pivxname-identity-${id.pubkey_hex.slice(0, 8)}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
 }
 
-async function adoptKey(privBytes, viaImport) {
-  S.priv = privBytes;
-  S.pub = await ed25519.getPublicKeyAsync(privBytes);
-  renderIdentity(viaImport);
-  maybeUnlock(3);
-  maybeUnlockM();
+async function signMsg(msgStr) {
+  const id = await ensureIdentity();
+  return hex(await ed25519.signAsync(enc.encode(msgStr), unhex(id.privkey_hex)));
+}
+async function selfVerify(memo, signerPubHex) {
+  const parts = memo.split(":");
+  const op = parts[2];
+  const pubIdx = ["REG", "UPD", "BUY"].includes(op) ? 5 : 4;
+  const pub = op === "CHG" ? unhex(signerPubHex) : unhex(parts[pubIdx]);
+  const body = enc.encode(parts.slice(0, -1).join(":"));
+  return ed25519.verifyAsync(unhex(parts[parts.length - 1]), body, pub);
 }
 
-function renderIdentity(viaImport) {
-  const box = $("identityBox");
-  box.innerHTML = `
-    <div class="line"><span class="k">${viaImport ? "imported key" : "new identity"}</span><span class="v good">✓ ready</span></div>
-    <div class="line"><span class="k">pubkey</span><span class="v">${hex(S.pub)}</span></div>
-    <div class="line"><span class="k">download</span><span class="v"><button class="btn primary tiny" id="btnDlKey">⬇ Save keyfile</button>
-      <span class="hint">owns your names. Losing it = losing them. It can't spend PIVX.</span></span></div>`;
-  show(box);
-  $("btnDlKey").onclick = () => { downloadKeyfile(); toast("Keyfile downloaded — store it somewhere safe"); };
-}
+// ---------------- state ----------------
+const S = { domain: null, priceZat: null };
 
 // ---------------- step unlocking ----------------
-function maybeUnlock(step) {
-  if (step >= 2 && S.domain !== null) show($("card-identity"));
-  if (step >= 3 && S.pub) show($("card-resolve"));
-  if (step >= 4 && validShielded($("resolveAddr").value.trim())) { renderSummary(); show($("card-pay")); }
-}
-function maybeUnlockM() {
-  if (S.pub) { show($("mcard-op")); renderMIdentity(); }
-}
-function renderMIdentity() {
-  const box = $("midentityBox");
-  box.innerHTML = `<div class="line"><span class="k">identity</span><span class="v good">✓ ${hex(S.pub).slice(0, 24)}…</span></div>`;
-  show(box);
+function maybeShowResolve() { if (S.domain !== null) show($("card-resolve")); }
+function maybeShowPay() {
+  if (validShielded($("resolveAddr").value.trim()) && S.domain) {
+    renderSummary();
+    show($("card-pay"));
+  }
 }
 
 // ---------------- STEP 1: search ----------------
@@ -172,24 +186,22 @@ $("btnSearch").onclick = async () => {
     if (!check.exists) {
       box.innerHTML = `
         <div class="line"><span class="k">availability</span><span class="v good">✓ ${domain} is AVAILABLE</span></div>
-        <div class="line"><span class="k">price</span><span class="v price">${zat(S.priceZat)} PIVX — one-time, no renewals</span></div>
-        <div class="line"><span class="k">next</span><span class="v">create your ownership key below</span></div>`;
-      maybeUnlock(2);
+        <div class="line"><span class="k">price</span><span class="v price">${zat(S.priceZat)} PIVX — one-time, no renewals</span></div>`;
+      maybeShowResolve();
     } else if (S.priceZat) {
       const bound = await idxGet(`/v1.0/resolve/${domain}`).catch(() => null);
       box.innerHTML = `
         <div class="line"><span class="k">${domain}</span><span class="v">REGISTERED &amp; LISTED for sale</span></div>
         <div class="line"><span class="k">price</span><span class="v price">${zat(S.priceZat)} PIVX</span></div>
         ${bound ? `<div class="line"><span class="k">bound to</span><span class="v">${bound.target_address}</span></div>` : ""}
-        <div class="line"><span class="k">buy it</span><span class="v">use the <b>Manage</b> tab → BUY with your key</span></div>`;
+        <div class="line"><span class="k">want it?</span><span class="v">Manage tab → BUY — same simple flow, you'll own it</span></div>`;
     } else {
       const bound = await idxGet(`/v1.0/resolve/${domain}`).catch(() => null);
       box.innerHTML = `
         <div class="line"><span class="k">${domain}</span><span class="v bad">already registered</span></div>
         ${bound ? `
           <div class="line"><span class="k">resolves to</span><span class="v">${bound.target_address}</span></div>
-          <div class="line"><span class="k">owner</span><span class="v">${bound.owner_pubkey}</span></div>
-          <div class="line"><span class="k">note</span><span class="v">if this is your key, open Manage to UPD/CHG/LST</span></div>` : ""}`;
+          <div class="line"><span class="k">owner</span><span class="v">${bound.owner_pubkey}</span></div>` : ""}`;
     }
     show(box);
   } catch (e) {
@@ -199,75 +211,50 @@ $("btnSearch").onclick = async () => {
 };
 $("searchName").addEventListener("keydown", (e) => e.key === "Enter" && $("btnSearch").click());
 
-// ---------------- STEP 2: identity ----------------
-$("btnGenKey").onclick = async () => {
-  const { priv, pub } = await newIdentity();
-  await adoptKey(priv, false);
-  toast("Identity created — download the keyfile!");
-};
-$("fileKey").addEventListener("change", async (e) => {
-  const f = e.target.files[0]; if (!f) return;
-  try {
-    const txt = await f.text().then((t) => t.trim());
-    let privHex = txt;
-    if (txt.startsWith("{")) {
-      const j = JSON.parse(txt);
-      privHex = j.privkey_hex;
-      if (j.type && j.type !== "pivxname-identity") throw new Error("not a pivxname keyfile");
-    }
-    if (!validPubHex(privHex)) throw new Error("keyfile must contain a 64-hex privkey_hex");
-    await adoptKey(unhex(privHex), true);
-    toast("Keyfile imported");
-  } catch (err) {
-    $("identityBox").innerHTML = `<div class="line bad">Import failed: ${err.message}</div>`;
-    show($("identityBox"));
-  }
-  e.target.value = "";
-});
-
-// ---------------- STEP 3: resolve address ----------------
+// ---------------- STEP 2: resolve address ----------------
 $("resolveAddr").addEventListener("input", () => {
   const v = $("resolveAddr").value.trim();
   const msg = $("resolveMsg");
-  if (!v) { msg.innerHTML = ""; return; }
+  if (!v) { msg.innerHTML = ""; hide($("card-pay")); return; }
   if (validShielded(v)) {
     msg.innerHTML = `<div class="line good">✓ valid shielded address</div>`;
-    maybeUnlock(4);
+    maybeShowPay();
   } else {
-    msg.innerHTML = `<div class="line bad">Not a mainnet shielded address — need ps1… exactly 78 chars (bech32). Transparent DQ…/testnet pts1… are refused by the registrar.</div>`;
+    msg.innerHTML = `<div class="line bad">Not a mainnet shielded address — need ps1… exactly 78 chars. Copy it from your wallet's receive screen (transparent DQ… / testnet pts1… won't work).</div>`;
     hide($("card-pay"));
   }
 });
 
-// ---------------- STEP 4: sign & pay ----------------
+// ---------------- STEP 3: pay (identity created silently here) ----------------
 function renderSummary() {
   $("signSummary").innerHTML = `
-    <b>${S.domain}</b> → resolves to <b>${$("resolveAddr").value.trim().slice(0, 20)}…</b><br>
-    owner-key <b>${S.pub ? hex(S.pub).slice(0, 16) + "…" : "—"}</b> ·
-    pay <b>${zat(S.priceZat)} PIVX</b> · settlement by pivx.name registrar (their fee, not ours — this site charges nothing)`;
+    <b>${S.domain}</b> → <b>${$("resolveAddr").value.trim().slice(0, 20)}…</b> ·
+    pay <b>${zat(S.priceZat)} PIVX</b> · one payment · fee goes to the registrar, this site charges nothing`;
 }
-$("resolveAddr").addEventListener("change", () => S.pub && renderSummary());
 
 $("btnSign").onclick = async () => {
   const btn = $("btnSign"); btn.disabled = true; btn.textContent = "signing…";
   try {
+    const id = await ensureIdentity();          // ← the whole "step 2", invisibly
     const target = $("resolveAddr").value.trim();
     const nonce = Math.floor(Date.now() / 1000);
-    const base = `PiNS:1:REG:${S.domain}:${target}:${hex(S.pub)}:${nonce}`;
+    const base = `PiNS:1:REG:${S.domain}:${target}:${id.pubkey_hex}:${nonce}`;
     if (base.length + 129 > MEMO_MAX) throw new Error("memo overflow");
-    const memo = `${base}:${await signMsg(base, S.priv)}`;
-    if (!(await selfVerify(memo))) throw new Error("self-verification failed");
-    S.memo = memo;
+    const memo = `${base}:${await signMsg(base)}`;
+    if (!(await selfVerify(memo, id.pubkey_hex))) throw new Error("self-verification failed");
 
     const pay = await regGet("/v1.0/getPaymentAddress");
     S.payAddr = pay.address;
     S.amountPivx = zat(S.priceZat);
+    rememberName(S.domain, id.pubkey_hex, target);
+
+    // the keyfile download IS the backup — fires automatically
+    downloadKeyfile(id);
 
     $("payAmount").value = `${S.amountPivx} PIVX`;
     $("payAddress").value = S.payAddr;
     $("payMemo").value = memo;
 
-    // QR — same pivx: URI scheme the official app uses
     const uri = `pivx:${S.payAddr}?amount=${S.amountPivx}&memo=${encodeURIComponent(memo).replace(/%3A/g, ":")}`;
     const qr = qrcode(0, "L");
     qr.addData(uri);
@@ -279,21 +266,23 @@ $("btnSign").onclick = async () => {
         <span class="v">${S.payAddr}</span></p>
       <p class="explain">Payment 2 — memo only: send <b>6 PIVX</b> (update fee) to the same address carrying this memo:<br>
         <span class="v">${memo}</span></p>
-      <p class="hint">The registrar attaches any well-formed command to whatever payment funds it. Result is identical: your key owns the name.</p>`;
+      <p class="hint">The registrar attaches any well-formed command to whatever payment funds it. Result is identical: you own the name.</p>`;
+
+    $("keyBox").innerHTML = `
+      <div class="line"><span class="k">recovery keyfile</span><span class="v">${id.pubkey_hex.slice(0, 24)}… (saved to your Downloads)</span></div>
+      <div class="line"><span class="k">re-download</span><span class="v"><button class="btn tiny" id="btnDlKey2">⬇ Save keyfile again</button></span></div>`;
+    $("btnDlKey2").onclick = () => downloadKeyfile(id);
 
     show($("signBox"));
     show($("trackBox"));
     startTracking();
   } catch (e) {
     toast("Signing failed: " + e.message);
-  } finally { btn.disabled = false; btn.textContent = "Sign registration"; }
+  } finally { btn.disabled = false; btn.textContent = "Sign & show payment"; }
 };
 
 document.querySelectorAll(".copybtn").forEach((b) => {
-  b.onclick = () => {
-    const el = $(b.dataset.copy);
-    navigator.clipboard.writeText(el.value).then(() => toast("Copied"));
-  };
+  b.onclick = () => navigator.clipboard.writeText($(b.dataset.copy).value).then(() => toast("Copied"));
 });
 
 // ---------------- tracking ----------------
@@ -310,32 +299,61 @@ function startTracking() {
       if (check.exists) {
         clearInterval(trackTimer);
         fill.style.width = "100%";
-        status.innerHTML = `<span class="good">✓ REGISTERED — ${S.domain} is live and bound to your address.</span>
-          <br><span class="hint">Resolve check: <a class="v" target="_blank" rel="noopener" href="${INDEXER}/v1.0/resolve/${S.domain}">${S.domain}</a></span>`;
+        status.innerHTML = `<span class="good">✓ REGISTERED — ${S.domain} is live and bound to your address.</span>`;
         return;
       }
-      const mins = Math.floor(elapsed / 60);
-      status.textContent = `Waiting for your payment… ~40 confirmations after it lands (${mins}m elapsed). Payment seen instantly once broadcast.`;
+      status.textContent = `Waiting for your payment… (~40 confirmations after it lands, ${Math.floor(elapsed / 60)}m elapsed)`;
       fill.style.width = `${Math.min(95, elapsed / 4)}%`;
-    } catch { /* registrar hiccup — keep polling */ }
+    } catch { /* keep polling */ }
   }, 15000);
 }
 
 // ---------------- MANAGE TAB ----------------
-$("mbtnGenKey").onclick = async () => {
-  const { priv } = await newIdentity();
-  await adoptKey(priv, false);
+function renderMIdentity(id) {
+  const names = myNames();
+  const nameLines = Object.entries(names).map(([d, n]) =>
+    `<div class="line"><span class="k">${d}</span><span class="v">${n.rx.slice(0, 24)}… ${n.pubkey_hex === id.pubkey_hex ? '<span class="good">✓ this key</span>' : '<span class="bad">different key</span>'}</span></div>`
+  ).join("") || `<div class="line"><span class="k">names</span><span class="v">none on this device yet</span></div>`;
+  $("midentityBox").innerHTML = `
+    <div class="line"><span class="k">identity</span><span class="v good">✓ ${id.pubkey_hex.slice(0, 24)}…</span></div>
+    ${nameLines}`;
+}
+
+(async () => {
+  const id = await ensureIdentity();
+  renderMIdentity(id);
+  const bound = Object.entries(myNames()).filter(([, n]) => n.pubkey_hex === id.pubkey_hex);
+  if (bound.length) show($("mcard-op"));
+})();
+
+function refreshManage() {
+  ensureIdentity().then((id) => {
+    renderMIdentity(id);
+    const bound = Object.entries(myNames()).filter(([, n]) => n.pubkey_hex === id.pubkey_hex);
+    if (bound.length) show($("mcard-op"));
+  });
+}
+
+$("mbtnNewIdentity").onclick = async () => {
+  const priv = ed25519.utils.randomPrivateKey();
+  const id = await setIdentity(hex(priv));
+  renderMIdentity(id);
+  toast("Separate identity active — fresh key, nothing shared");
 };
 $("mfileKey").addEventListener("change", async (e) => {
   const f = e.target.files[0]; if (!f) return;
   try {
     const txt = (await f.text()).trim();
-    const privHex = txt.startsWith("{") ? (JSON.parse(txt).privkey_hex) : txt;
+    const privHex = txt.startsWith("{") ? JSON.parse(txt).privkey_hex : txt;
     if (!validPubHex(privHex)) throw new Error("bad keyfile");
-    await adoptKey(unhex(privHex), true);
+    const id = await setIdentity(privHex);
+    renderMIdentity(id);
+    show($("mcard-op"));
+    toast("Keyfile imported");
   } catch (err) { toast("Import failed: " + err.message); }
   e.target.value = "";
 });
+$("mbtnDownload").onclick = async () => downloadKeyfile(await ensureIdentity());
 
 $("mOp").addEventListener("change", () => {
   const op = $("mOp").value;
@@ -349,7 +367,7 @@ $("mbtnBuild").onclick = async () => {
   const btn = $("mbtnBuild");
   btn.disabled = true; btn.textContent = "checking state…";
   try {
-    if (!S.pub) throw new Error("load a keyfile first");
+    const id = await ensureIdentity();
     const op = $("mOp").value;
     const domain = $("mDomain").value.trim().toLowerCase();
     if (!validDomain(domain)) throw new Error("invalid domain");
@@ -357,7 +375,7 @@ $("mbtnBuild").onclick = async () => {
     const bound = await idxGet(`/v1.0/resolve/${domain}`).catch(() => null);
     const listed = bound && Number(bound.price) > 0;
     const owner = bound && bound.owner_pubkey;
-    const isOwner = owner && owner === hex(S.pub);
+    const isOwner = owner && owner === id.pubkey_hex;
 
     let base, amount, note = "";
     const nonce = Math.floor(Date.now() / 1000);
@@ -370,14 +388,14 @@ $("mbtnBuild").onclick = async () => {
       if (!bound) throw new Error("name not registered");
       if (!isOwner) throw new Error(`not your name — owner is ${owner ? owner.slice(0, 16) + "…" : "?"}`);
       if (listed) throw new Error("name is LISTED — ULT first (registrar refuses UPD/CHG on listed names)");
-      base = `PiNS:1:UPD:${domain}:${target}:${hex(S.pub)}:${nonce}`;
+      base = `PiNS:1:UPD:${domain}:${target}:${id.pubkey_hex}:${nonce}`;
       amount = updFeeZat; note = "changes the resolve address";
     } else if (op === "CHG") {
       const newOwner = $("mNewOwner").value.trim().toLowerCase();
       if (!validPubHex(newOwner)) throw new Error("new owner must be 64-hex pubkey (their keyfile → pubkey)");
       if (!bound) throw new Error("name not registered");
       if (!isOwner) throw new Error(`not your name — owner is ${owner.slice(0, 16)}…`);
-      if (newOwner === hex(S.pub)) throw new Error("that's already the owner");
+      if (newOwner === id.pubkey_hex) throw new Error("that's already the owner");
       if (listed) throw new Error("name is LISTED — ULT first");
       base = `PiNS:1:CHG:${domain}:${newOwner}:${nonce}`;
       amount = updFeeZat; note = "transfers ownership — after this YOU lose control, receiver gains it";
@@ -388,13 +406,13 @@ $("mbtnBuild").onclick = async () => {
       if (!Number.isSafeInteger(priceZat) || priceZat <= 0) throw new Error("price out of range");
       if (!bound) throw new Error("name not registered");
       if (!isOwner) throw new Error(`not your name — owner is ${owner.slice(0, 16)}…`);
-      base = `PiNS:1:LST:${domain}:${hex(S.pub)}:${priceZat}:${nonce}`;
+      base = `PiNS:1:LST:${domain}:${id.pubkey_hex}:${priceZat}:${nonce}`;
       amount = updFeeZat; note = `lists for sale at ${piv} PIVX (memo price) — you PAY the ${zat(updFeeZat)} upd fee`;
     } else if (op === "ULT") {
       if (!bound) throw new Error("name not registered");
       if (!isOwner) throw new Error(`not your name — owner is ${owner.slice(0, 16)}…`);
       if (!listed) throw new Error("not listed — nothing to delist");
-      base = `PiNS:1:ULT:${domain}:${hex(S.pub)}:${nonce}`;
+      base = `PiNS:1:ULT:${domain}:${id.pubkey_hex}:${nonce}`;
       amount = updFeeZat; note = "removes the listing";
     } else if (op === "BUY") {
       const target = $("mTargetAddr").value.trim();
@@ -402,12 +420,12 @@ $("mbtnBuild").onclick = async () => {
       if (!bound) throw new Error("name not registered");
       if (!listed) throw new Error("not listed for sale");
       if (isOwner) throw new Error("you already own it");
-      base = `PiNS:1:BUY:${domain}:${target}:${hex(S.pub)}:${nonce}`;
-      amount = Number(bound.price); note = `pays the seller's listed price exactly — sale proceeds go to their registrar balance`;
+      base = `PiNS:1:BUY:${domain}:${target}:${id.pubkey_hex}:${nonce}`;
+      amount = Number(bound.price); note = `pays the seller's listed price exactly — proceeds go to their registrar balance`;
     }
 
-    const memo = `${base}:${await signMsg(base, S.priv)}`;
-    if (!(await selfVerify(memo))) throw new Error("self-verification failed");
+    const memo = `${base}:${await signMsg(base)}`;
+    if (!(await selfVerify(memo, id.pubkey_hex))) throw new Error("self-verification failed");
 
     const pay = await regGet("/v1.0/getPaymentAddress");
     const amtPivx = zat(amount);
@@ -446,5 +464,9 @@ document.querySelectorAll(".navlink[data-tab]").forEach((a) => {
     a.classList.add("active");
     document.querySelectorAll(".tab").forEach((t) => hide(t));
     show($(`tab-${a.dataset.tab}`));
+    if (a.dataset.tab === "manage") refreshManage();
   };
 });
+if (location.hash === "#manage") {
+  document.querySelector('.navlink[data-tab="manage"]').click();
+}

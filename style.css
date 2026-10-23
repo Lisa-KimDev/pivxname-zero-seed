@@ -131,6 +131,10 @@ textarea[readonly] { resize: none; }
 .fallback summary { cursor: pointer; color: var(--yellow); font-size: .88rem; font-weight: 600; }
 .fallback p { margin-top: 8px; }
 
+.advanced { margin-top: 14px; border: 1px dashed var(--line); border-radius: 10px; padding: 10px 14px; }
+.advanced summary { cursor: pointer; color: var(--mut); font-size: .82rem; }
+.advanced[open] summary { color: var(--yellow); }
+
 .track { margin-top: 16px; }
 .track h3 { font-size: .92rem; margin-bottom: 8px; }
 .trackstatus { font-size: .88rem; color: #c9c9d4; }
