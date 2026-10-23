@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://registrar.pivx.name https://indexer.pivx.name; base-uri 'none'; form-action 'none'">
+<title>PIVX Names, zero seeds — register .pivx without a seed phrase</title>
+<meta name="description" content="Register .pivx / .private / .secure / .safe names with a downloadable identity key. No seed phrase entry, ever. Community front-end for the PiNS protocol.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111'/%3E%3Ctext x='16' y='22' font-size='16' font-family='monospace' font-weight='bold' fill='%23e7f900' text-anchor='middle'%3Eπ%3C/text%3E%3C/svg%3E">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="brand-mark">π</span>
+    <div>
+      <h1>PIVX Names<span class="accent">.zero seeds</span></h1>
+      <p class="tagline">Register a .pivx name with a keyfile you own. No seed phrase is ever typed, stored, or transmitted.</p>
+    </div>
+  </div>
+  <nav>
+    <a href="#register" class="navlink active" data-tab="register">Register</a>
+    <a href="#manage" class="navlink" data-tab="manage">Manage</a>
+    <a href="https://docs.pivx.name" target="_blank" rel="noopener" class="navlink ext">Docs ↗</a>
+  </nav>
+</header>
+
+<main>
+<!-- ============================== REGISTER ============================== -->
+<section id="tab-register" class="tab">
+
+  <!-- STEP 1: SEARCH -->
+  <div class="card" id="card-search">
+    <div class="stepnum">1</div>
+    <h2>Find your name</h2>
+    <div class="searchrow">
+      <input id="searchName" type="text" placeholder="yourname" autocomplete="off"
+             spellcheck="false" maxlength="70">
+      <select id="searchZone">
+        <option>.pivx</option><option>.private</option><option>.secure</option><option>.safe</option>
+      </select>
+      <button id="btnSearch" class="btn primary">Check</button>
+    </div>
+    <p class="hint">a–z, 0–9, hyphens. Length sets the price: 7+ chars = 90 PIVX, 4 chars = 700.</p>
+    <div id="searchResult" class="result hidden"></div>
+  </div>
+
+  <!-- STEP 2: IDENTITY -->
+  <div class="card hidden" id="card-identity">
+    <div class="stepnum">2</div>
+    <h2>Your ownership key <span class="badge">not a wallet</span></h2>
+    <p class="explain">Names are owned by an Ed25519 key — the same trick every PiNS app uses.
+      The difference: here it's a <strong>random 32 bytes you download as a file</strong>.
+      It can never spend your PIVX. It only proves <em>you own your names</em>.</p>
+    <div class="btnrow">
+      <button id="btnGenKey" class="btn primary">Generate identity</button>
+      <label class="btn ghost filebtn">Import keyfile<input type="file" id="fileKey" accept=".json,.txt" hidden></label>
+    </div>
+    <div id="identityBox" class="result hidden"></div>
+  </div>
+
+  <!-- STEP 3: RESOLVE ADDRESS -->
+  <div class="card hidden" id="card-resolve">
+    <div class="stepnum">3</div>
+    <h2>Where payments go</h2>
+    <p class="explain">Paste the <strong>shielded address</strong> (<code>ps1…</code>, 78 chars) the name
+      should resolve to. Anyone who pays <code>yourname.pivx</code> sends here.
+      This is <em>not</em> the ownership key — the keyfile above is.</p>
+    <input id="resolveAddr" type="text" class="wide mono" placeholder="ps1… (78 characters)" autocomplete="off" spellcheck="false">
+    <div id="resolveMsg" class="result"></div>
+  </div>
+
+  <!-- STEP 4: SIGN & PAY -->
+  <div class="card hidden" id="card-pay">
+    <div class="stepnum">4</div>
+    <h2>Sign &amp; pay <span class="badge">one payment</span></h2>
+    <div id="signSummary" class="summary"></div>
+    <button id="btnSign" class="btn primary big">Sign registration</button>
+    <div id="signBox" class="result hidden">
+      <p class="explain ok">✓ Signed &amp; self-verified. The signature was created in this tab;
+        your key never left the page.</p>
+      <div class="paygrid">
+        <div class="payqr" id="payQr"></div>
+        <div class="payfields">
+          <label>Send exactly</label>
+          <div class="copyrow"><input id="payAmount" readonly class="mono"><button class="btn tiny copybtn" data-copy="payAmount">copy</button></div>
+          <label>To address</label>
+          <div class="copyrow"><input id="payAddress" readonly class="mono"><button class="btn tiny copybtn" data-copy="payAddress">copy</button></div>
+          <label>Memo (required — it IS the command)</label>
+          <div class="copyrow"><textarea id="payMemo" readonly class="mono" rows="4"></textarea><button class="btn tiny copybtn" data-copy="payMemo">copy</button></div>
+          <p class="hint">Scan with MPW / PIVXie, or send manually from Core, Coinomi, an exchange withdrawal — any wallet that lets you set a memo. Memo too long for your wallet? See the fallback below.</p>
+        </div>
+      </div>
+      <details id="fallbackBox" class="fallback">
+        <summary>Wallet can't send a memo? — two-payment fallback</summary>
+        <p class="explain">A wallet without memo support can still get you the name in two payments:
+          first send the <strong>90 PIVX here</strong> (no memo), then paste the signed command below
+          into the <em>second</em> payment of 6 PIVX (update fee). The registrar attaches
+          well-formed commands to whichever payment arrives — your identity, your name either way.</p>
+        <div id="fallbackContent"></div>
+      </details>
+      <div id="trackBox" class="track hidden">
+        <h3>Registration tracker</h3>
+        <div id="trackStatus" class="trackstatus">Waiting for your payment…</div>
+        <div class="trackbar"><div id="trackBarFill"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="trustnote">
+    <strong>How this is safe:</strong> static page — nothing here can phone home with your key,
+    the CSP in the page source blocks every domain except the two official PiNS APIs, and all
+    crypto runs in your tab. Verify it: view-source, or ask any AI to audit <code>app.js</code>.
+  </div>
+</section>
+
+<!-- ============================== MANAGE ============================== -->
+<section id="tab-manage" class="tab hidden">
+  <div class="card">
+    <div class="stepnum">1</div>
+    <h2>Load your keyfile</h2>
+    <div class="btnrow">
+      <label class="btn primary filebtn">Import keyfile<input type="file" id="mfileKey" accept=".json,.txt" hidden></label>
+      <button id="mbtnGenKey" class="btn ghost">New identity</button>
+    </div>
+    <div id="midentityBox" class="result hidden"></div>
+  </div>
+
+  <div class="card hidden" id="mcard-op">
+    <div class="stepnum">2</div>
+    <h2>Build a command</h2>
+    <div class="opgrid">
+      <label>Operation
+        <select id="mOp">
+          <option value="UPD">UPD — change resolve address (upd fee)</option>
+          <option value="CHG">CHG — transfer ownership to another key (upd fee)</option>
+          <option value="LST">LST — list for sale (upd fee)</option>
+          <option value="ULT">ULT — delist (upd fee)</option>
+          <option value="BUY">BUY — buy a listed name (listed price)</option>
+        </select>
+      </label>
+      <label>Name
+        <input id="mDomain" type="text" placeholder="name.pivx" class="mono" autocomplete="off" spellcheck="false">
+      </label>
+      <label id="mTargetLabel" data-ops="UPD BUY">Target ps1… address
+        <input id="mTargetAddr" type="text" class="mono" placeholder="ps1… (78 chars)" autocomplete="off" spellcheck="false">
+      </label>
+      <label id="mNewOwnerLabel" data-ops="CHG" class="hidden">New owner's pubkey (64 hex — from their keyfile)
+        <input id="mNewOwner" type="text" class="mono" placeholder="a4bf…" autocomplete="off" spellcheck="false">
+      </label>
+      <label id="mPriceLabel" data-ops="LST" class="hidden">Listing price (PIVX)
+        <input id="mPrice" type="number" min="0" step="any" placeholder="50">
+      </label>
+    </div>
+    <button id="mbtnBuild" class="btn primary big">Check state &amp; sign</button>
+    <div id="mResult" class="result hidden"></div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <p>Community front-end for the <a href="https://docs.pivx.name" target="_blank" rel="noopener">PiNS protocol</a> ·
+     registry &amp; settlement by <a href="https://pivx.name" target="_blank" rel="noopener">pivx.name</a> ·
+     this site is static and unaffiliated · never enter a wallet seed phrase anywhere, including here — there is no input for one.</p>
+</footer>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="js/vendor/qrcode.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
