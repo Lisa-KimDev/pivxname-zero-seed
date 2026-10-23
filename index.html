@@ -6,12 +6,13 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://registrar.pivx.name https://indexer.pivx.name; base-uri 'none'; form-action 'none'">
 <title>PIVX Names, zero seeds — pick a name, pay, done</title>
 <meta name="description" content="Register .pivx / .private / .secure / .safe names: enter a name, enter your address, pay. No seed phrase, no account, no key ceremony. Community front-end for the PiNS protocol.">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=4">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111'/%3E%3Ctext x='16' y='22' font-size='16' font-family='monospace' font-weight='bold' fill='%23e7f900' text-anchor='middle'%3Eπ%3C/text%3E%3C/svg%3E">
 </head>
 <body>
 
 <header>
+  <button class="burger" id="burger" aria-label="Menu" aria-expanded="false">☰</button>
   <div class="brand">
     <span class="brand-mark">π</span>
     <div>
@@ -19,7 +20,7 @@
       <p class="tagline">Pick a name. Point it at your address. Pay. Ownership is handled for you — no seed phrase, no account, no keys to babysit.</p>
     </div>
   </div>
-  <nav>
+  <nav id="mainNav">
     <a href="#register" class="navlink active" data-tab="register">Register</a>
     <a href="#manage" class="navlink" data-tab="manage">Manage</a>
     <a href="https://docs.pivx.name" target="_blank" rel="noopener" class="navlink ext">Docs ↗</a>
@@ -165,6 +166,6 @@
 <div id="toast" class="toast hidden"></div>
 
 <script src="js/vendor/qrcode.js"></script>
-<script type="module" src="js/app.js"></script>
+<script type="module" src="js/app.js?v=3"></script>
 </body>
 </html>

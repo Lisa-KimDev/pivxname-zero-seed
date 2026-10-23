@@ -470,3 +470,18 @@ document.querySelectorAll(".navlink[data-tab]").forEach((a) => {
 if (location.hash === "#manage") {
   document.querySelector('.navlink[data-tab="manage"]').click();
 }
+
+// ---------------- mobile menu ----------------
+const burger = $("burger"), mainNav = $("mainNav");
+burger.onclick = () => {
+  const open = mainNav.classList.toggle("open");
+  burger.setAttribute("aria-expanded", String(open));
+  burger.textContent = open ? "✕" : "☰";
+};
+mainNav.addEventListener("click", (e) => {
+  if (e.target.classList.contains("navlink") && mainNav.classList.contains("open")) {
+    mainNav.classList.remove("open");
+    burger.textContent = "☰";
+    burger.setAttribute("aria-expanded", "false");
+  }
+});
